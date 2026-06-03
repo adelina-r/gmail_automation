@@ -2,8 +2,20 @@ import CategorySection from './CategorySection.jsx'
 import CleanupQueue from './CleanupQueue.jsx'
 import { CATEGORIES, CLEANUP_CATEGORIES } from '../lib/anthropic.js'
 
-// Categories shown as full sections (not cleanup)
-const DIGEST_CATEGORIES = ['action_needed', 'insurance', 'travel', 'finance', 'school']
+// Categories shown as full sections (not cleanup), in display order.
+// Time-sensitive buckets (scheduling, shipping) sit near the top; cleanup
+// categories (otp/promotional/newsletter/statement_notice) are handled separately.
+const DIGEST_CATEGORIES = [
+  'action_needed',
+  'scheduling_reminders',
+  'shipping_orders',
+  'insurance',
+  'medical_billing',
+  'financial',
+  'travel',
+  'school',
+  'keep',
+]
 
 export default function InboxDigest({
   emails,

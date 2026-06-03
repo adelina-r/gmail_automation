@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import LoginScreen from './components/LoginScreen.jsx'
 import InboxDigest from './components/InboxDigest.jsx'
+import EvalPanel from './components/EvalPanel.jsx'
 import { initGoogleAuth, requestGmailAccess, getStoredToken, clearStoredToken, executeStagedChange, fetchInboxEmails } from './lib/gmail.js'
 import { classifyEmails } from './lib/anthropic.js'
 import { generateStagedChanges } from './lib/rules.js'
+import { runLabelEval } from './lib/eval.js'
 
 // ── Configuration ────────────────────────────────────────────────────────────
 // Set your Google OAuth Client ID here OR enter it in the login screen
@@ -17,6 +19,7 @@ export default function App() {
   const [stagedChanges, setStagedChanges] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [evalState, setEvalState] = useState({ open: false, loading: false, report: null, error: null })
 
   // Initialize Google Auth once clientId is set
   useEffect(() => {
@@ -76,6 +79,23 @@ export default function App() {
 
   function handleRefresh() {
     if (accessToken) loadEmails(accessToken)
+  }
+
+  // Run the ground-truth accuracy eval against existing Gmail labels.
+  async function handleRunEval() {
+    const apiKey = localStorage.getItem('anthropic_key')
+    if (!accessToken || !apiKey) {
+      setEvalState({ open: true, loading: false, report: null, error: 'Need Gmail connected and an Anthropic key.' })
+      return
+    }
+    setEvalState({ open: true, loading: true, report: null, error: null })
+    try {
+      const report = await runLabelEval(accessToken, apiKey, { perLabel: 15 })
+      setEvalState({ open: true, loading: false, report, error: null })
+    } catch (err) {
+      console.error(err)
+      setEvalState({ open: true, loading: false, report: null, error: err.message })
+    }
   }
 
   // Approve a single staged change
@@ -153,6 +173,15 @@ export default function App() {
         loading={loading}
         onSignOut={handleSignOut}
       />
+      <button
+        onClick={handleRunEval}
+        disabled={evalState.loading}
+        style={evalButtonStyle}
+        title="Score the classifier against your existing Gmail labels"
+      >
+        {evalState.loading ? 'Checking…' : '📊 Accuracy check'}
+      </button>
+      <EvalPanel state={evalState} onClose={() => setEvalState((s) => ({ ...s, open: false }))} />
       <style>{`
         @keyframes spin {
           to { transform: rotate(360deg); }
@@ -160,6 +189,22 @@ export default function App() {
       `}</style>
     </>
   )
+}
+
+const evalButtonStyle = {
+  position: 'fixed',
+  bottom: '16px',
+  right: '16px',
+  background: '#fff',
+  border: '1px solid #d1d5db',
+  color: '#374151',
+  padding: '8px 14px',
+  borderRadius: 'var(--radius)',
+  fontSize: '13px',
+  fontWeight: 600,
+  cursor: 'pointer',
+  zIndex: 100,
+  boxShadow: 'var(--shadow-md)',
 }
 
 const errorBannerStyle = {

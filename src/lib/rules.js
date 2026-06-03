@@ -5,6 +5,121 @@
  * These are used to auto-generate staged changes after classification.
  */
 
+/**
+ * Sender-based overrides. These bypass the AI classifier for known senders —
+ * cheaper and deterministic (per categorization-feedback.md §G). A rule either
+ * FORCES a category (skip the AI entirely) or GUARDS against one (`never`:
+ * downgrade if the AI picks a forbidden category).
+ *
+ * Matching: case-insensitive substring against the fields in `matchFields`
+ * (default: senderEmail + senderName; mailing-list tags also check subject).
+ * If `subjectAny` is set, the rule only matches when the subject contains one
+ * of those substrings — used to keep portal "new message" stubs out of billing.
+ *
+ * IMPORTANT: medical billing routes to the existing `HSA Tracking` Gmail label,
+ * NOT a "medical" label. We never create a medical label. Appointment reminders
+ * and portal stubs are deliberately NOT forced here.
+ */
+export const SENDER_RULES = [
+  {
+    id: 'sender-sutter-billing',
+    name: 'Sutter billing → HSA Tracking',
+    match: ['no-reply_billing@care.sutterhealth.org', 'myhealthonline@sutterhealth.org'],
+    category: 'medical_billing',
+    reason: 'Sutter billing address → HSA Tracking',
+    enabled: true,
+  },
+  {
+    id: 'sender-midi-billing',
+    name: 'Midi billing → HSA Tracking',
+    match: ['patient-message.com'],
+    subjectAny: ['receipt', 'statement', 'balance', 'payment', 'charges', 'pay'],
+    category: 'medical_billing',
+    reason: 'Midi billing (patient-message.com) → HSA Tracking',
+    enabled: true,
+  },
+  {
+    id: 'sender-cigna',
+    name: 'Cigna → HSA Tracking (medical, not P&C insurance)',
+    match: ['cigna.com', 'cigna'],
+    category: 'medical_billing',
+    reason: 'Cigna is medical insurance (EOBs/statements) → HSA Tracking, not the P&C insurance label',
+    enabled: true,
+  },
+  {
+    id: 'sender-mercury',
+    name: 'Mercury → insurance (P&C)',
+    match: ['mercuryinsurance.com', 'mercury insurance'],
+    category: 'insurance',
+    reason: 'Mercury is a property/casualty insurer → insurance label',
+    enabled: true,
+  },
+  {
+    id: 'sender-midi-care-guard',
+    name: 'Midi care@joinmidi.com → never insurance',
+    match: ['care@joinmidi.com'],
+    never: 'insurance',
+    reason: 'Midi appointment/portal/marketing mail is not P&C insurance — block the wrong label until the prompt is tuned',
+    enabled: true,
+  },
+  {
+    id: 'sender-scclc-exchange',
+    name: '[scclc-exchange] list → never Needs Action',
+    match: ['[scclc-exchange]'],
+    matchFields: ['subject', 'senderName', 'senderEmail'],
+    never: 'action_needed',
+    reason: 'scclc-exchange list is low-priority; never auto-flag Needs Action',
+    enabled: true,
+  },
+  {
+    id: 'sender-2028-families',
+    name: '[2028-families] list → school',
+    match: ['[2028-families]'],
+    matchFields: ['subject', 'senderName', 'senderEmail'],
+    category: 'school',
+    reason: '2028-families school list → school (child care label)',
+    enabled: true,
+  },
+]
+
+/**
+ * Find the first matching sender rule for an email, or null.
+ */
+export function matchSenderRule(email) {
+  for (const rule of SENDER_RULES) {
+    if (!rule.enabled) continue
+    const fields = rule.matchFields ?? ['senderEmail', 'senderName']
+    const text = fields.map((f) => email[f] ?? '').join(' ').toLowerCase()
+    if (!rule.match.some((m) => text.includes(m.toLowerCase()))) continue
+    if (rule.subjectAny) {
+      const subj = (email.subject ?? '').toLowerCase()
+      if (!rule.subjectAny.some((s) => subj.includes(s.toLowerCase()))) continue
+    }
+    return rule
+  }
+  return null
+}
+
+/**
+ * Resolve a final category for an email given an (optional) AI category.
+ * - Forced-category rule → returns that category, bypassedAi: true.
+ * - `never` guardrail     → if the AI picked the forbidden category, downgrade
+ *                           to 'other'; otherwise leave the AI category as-is.
+ * - No match              → returns the AI category unchanged.
+ * Returns null only when there's no rule and no AI category to fall back on.
+ */
+export function resolveCategory(email, aiCategory = null, aiReason = '') {
+  const rule = matchSenderRule(email)
+  if (rule?.category) {
+    return { category: rule.category, reason: rule.reason, bypassedAi: true }
+  }
+  if (rule?.never && aiCategory === rule.never) {
+    return { category: 'other', reason: rule.reason, bypassedAi: false }
+  }
+  if (aiCategory) return { category: aiCategory, reason: aiReason, bypassedAi: false }
+  return null
+}
+
 export const LABEL_RULES = [
   {
     id: 'insurance-label',
@@ -12,6 +127,14 @@ export const LABEL_RULES = [
     category: 'insurance',
     action: 'label',
     label: 'insurance',
+    enabled: true,
+  },
+  {
+    id: 'medical-billing-label',
+    name: 'Label medical billing → HSA Tracking',
+    category: 'medical_billing',
+    action: 'label',
+    label: 'HSA Tracking', // existing label — never creates a "medical" label
     enabled: true,
   },
   {
@@ -23,11 +146,12 @@ export const LABEL_RULES = [
     enabled: true,
   },
   {
-    id: 'finance-label',
-    name: 'Label finance emails',
-    category: 'finance',
+    // Replaces the retired `finance` rule — `Old Labels/finance` is archived (C1).
+    id: 'financial-label',
+    name: 'Label keep-worthy financial emails',
+    category: 'financial',
     action: 'label',
-    label: 'finance',
+    label: 'financial', // NEW label — created approval-first
     enabled: true,
   },
   {
@@ -36,6 +160,30 @@ export const LABEL_RULES = [
     category: 'school',
     action: 'label',
     label: 'child care',
+    enabled: true,
+  },
+  {
+    id: 'shipping-label',
+    name: 'Label shipping/order updates',
+    category: 'shipping_orders',
+    action: 'label',
+    label: 'Shipping & Pending Orders', // NEW label — created approval-first
+    enabled: true,
+  },
+  {
+    id: 'scheduling-label',
+    name: 'Label scheduling/reminders',
+    category: 'scheduling_reminders',
+    action: 'label',
+    label: 'Scheduling & Reminders', // NEW label — created approval-first
+    enabled: true,
+  },
+  {
+    id: 'keep-label',
+    name: 'Label keep-safe items (gift cards, vouchers)',
+    category: 'keep',
+    action: 'label',
+    label: 'keep', // NEW label — created approval-first
     enabled: true,
   },
 ]
@@ -48,13 +196,88 @@ export const CLEANUP_RULES = [
     action: 'trash',
     enabled: true,
   },
+  {
+    id: 'statement-archive',
+    name: 'Archive "statement ready" notices',
+    category: 'statement_notice',
+    action: 'archive',
+    enabled: true,
+  },
 ]
+
+// ── Time-decay config (days) ─────────────────────────────────────────────────
+// Transient mail (shipping, scheduling) files to a label, then ages out to a
+// staged trash. Scheduling decays off the EVENT date (received-age is wrong for a
+// "2 months out" invite); shipping decays off received-age; calendar invites
+// quick-decay since they're redundant once they've sat a few days.
+const DAY_MS = 86400000
+export const DECAY = {
+  shippingAfterDays: 14,        // shipping_orders: days since received
+  schedulingGraceDays: 3,       // scheduling_reminders: days after eventDate
+  schedulingFallbackDays: 30,   // scheduling_reminders with no parseable eventDate
+  calendarInviteAfterDays: 3,   // calendar invites: days since received
+}
+
+/**
+ * Detect a Google Calendar invite from metadata alone (no RSVP state available).
+ * Runs independently of the AI category so a misclassified invite is still caught.
+ */
+export function isCalendarInvite(email) {
+  const from = (email.senderEmail ?? '').toLowerCase()
+  if (from.includes('calendar-notification@google.com')) return true
+  const subj = (email.subject ?? '').toLowerCase()
+  return /^(invitation:|updated invitation:|canceled event:|accepted:|declined:|tentative:)/.test(subj)
+}
+
+/**
+ * Should this email be staged for trash now (past its useful life)?
+ * @param {object} cls - {category, eventDate}
+ * @param {number} now - Date.now(), injectable for tests
+ */
+export function shouldDecayTrash(email, cls, now = Date.now()) {
+  const ageDays = (now - email.dateMs) / DAY_MS
+  if (isCalendarInvite(email)) return ageDays > DECAY.calendarInviteAfterDays
+  if (cls.category === 'shipping_orders') return ageDays > DECAY.shippingAfterDays
+  if (cls.category === 'scheduling_reminders') {
+    if (cls.eventDate) {
+      const eventMs = Date.parse(`${cls.eventDate}T23:59:59`)
+      if (!Number.isNaN(eventMs)) return now > eventMs + DECAY.schedulingGraceDays * DAY_MS
+    }
+    return ageDays > DECAY.schedulingFallbackDays // no parseable date → received-age fallback
+  }
+  return false
+}
+
+function decayReason(email, cls) {
+  if (isCalendarInvite(email)) return 'Calendar invite — likely already on your calendar (3+ days old)'
+  if (cls.category === 'shipping_orders') return 'Order/shipping update older than 14 days'
+  if (cls.eventDate) return `Scheduled event ${cls.eventDate} has passed`
+  return 'Scheduling reminder older than 30 days'
+}
+
+/** Build a staged-change object in the canonical shape. */
+function makeChange(ruleId, email, action, label, reason) {
+  return {
+    id: `${ruleId}-${email.id}`,
+    ruleId,
+    emailId: email.id,
+    subject: email.subject,
+    senderName: email.senderName,
+    senderEmail: email.senderEmail,
+    date: email.date,
+    dateMs: email.dateMs,
+    action,
+    label,
+    reason,
+    status: 'pending',
+  }
+}
 
 /**
  * Generate staged changes from classified emails.
  *
  * @param {Array} emails - parsed email objects
- * @param {Map} classifications - Map<id, {category, reason}>
+ * @param {Map} classifications - Map<id, {category, reason, eventDate}>
  * @returns {{ labelChanges: StagedChange[], cleanupChanges: StagedChange[] }}
  */
 export function generateStagedChanges(emails, classifications) {
@@ -65,7 +288,14 @@ export function generateStagedChanges(emails, classifications) {
     const cls = classifications.get(email.id)
     if (!cls) continue
 
-    // Check label rules
+    // Time-decay: if transient mail is past its useful life, stage a trash and
+    // skip labeling — no point filing something we're suggesting to delete.
+    if (shouldDecayTrash(email, cls)) {
+      cleanupChanges.push(makeChange('decay-trash', email, 'trash', null, decayReason(email, cls)))
+      continue
+    }
+
+    // Label rules
     for (const rule of LABEL_RULES) {
       if (!rule.enabled) continue
       if (cls.category !== rule.category) continue
@@ -74,42 +304,14 @@ export function generateStagedChanges(emails, classifications) {
         (id) => id.toLowerCase().includes(rule.label.toLowerCase())
       )
       if (alreadyLabeled) continue
-
-      labelChanges.push({
-        id: `${rule.id}-${email.id}`,
-        ruleId: rule.id,
-        emailId: email.id,
-        subject: email.subject,
-        senderName: email.senderName,
-        senderEmail: email.senderEmail,
-        date: email.date,
-        dateMs: email.dateMs,
-        action: 'label',
-        label: rule.label,
-        reason: cls.reason,
-        status: 'pending',
-      })
+      labelChanges.push(makeChange(rule.id, email, 'label', rule.label, cls.reason))
     }
 
-    // Check cleanup rules
+    // Cleanup rules (category-based: otp, statement_notice)
     for (const rule of CLEANUP_RULES) {
       if (!rule.enabled) continue
       if (cls.category !== rule.category) continue
-
-      cleanupChanges.push({
-        id: `${rule.id}-${email.id}`,
-        ruleId: rule.id,
-        emailId: email.id,
-        subject: email.subject,
-        senderName: email.senderName,
-        senderEmail: email.senderEmail,
-        date: email.date,
-        dateMs: email.dateMs,
-        action: rule.action,
-        label: null,
-        reason: cls.reason,
-        status: 'pending',
-      })
+      cleanupChanges.push(makeChange(rule.id, email, rule.action, null, cls.reason))
     }
   }
 

@@ -114,13 +114,13 @@ export async function findOrCreateLabel(token, name) {
 // ─── Messages ────────────────────────────────────────────────────────────────
 
 /**
- * Fetch a page of inbox messages (metadata only for speed).
+ * Fetch messages matching an arbitrary Gmail query (metadata only for speed).
  * Returns an array of parsed email objects.
  */
-export async function fetchInboxEmails(token, maxResults = 100) {
+export async function fetchEmailsByQuery(token, query, maxResults = 100) {
   const listData = await gmailFetch(
     token,
-    `/messages?maxResults=${maxResults}&q=in:inbox -is:draft`
+    `/messages?maxResults=${maxResults}&q=${encodeURIComponent(query)}`
   )
   const messages = listData.messages ?? []
   if (messages.length === 0) return []
@@ -142,6 +142,14 @@ export async function fetchInboxEmails(token, maxResults = 100) {
   }
 
   return results.map(parseMessage)
+}
+
+/**
+ * Fetch a page of inbox messages (metadata only for speed).
+ * Returns an array of parsed email objects.
+ */
+export async function fetchInboxEmails(token, maxResults = 100) {
+  return fetchEmailsByQuery(token, 'in:inbox -is:draft', maxResults)
 }
 
 /**
