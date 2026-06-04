@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback } from 'react'
 import LoginScreen from './components/LoginScreen.jsx'
 import InboxDigest from './components/InboxDigest.jsx'
 import EvalPanel from './components/EvalPanel.jsx'
-import { initGoogleAuth, requestGmailAccess, getStoredToken, clearStoredToken, executeStagedChange, fetchInboxEmails } from './lib/gmail.js'
+import { initGoogleAuth, requestGmailAccess, getStoredToken, clearStoredToken, executeStagedChange, fetchInboxEmails, buildLabelIndex } from './lib/gmail.js'
 import { classifyEmails } from './lib/anthropic.js'
 import { generateStagedChanges } from './lib/rules.js'
+import * as exclusionsStore from './lib/exclusions.js'
 import { runLabelEval } from './lib/eval.js'
 
 // ── Configuration ────────────────────────────────────────────────────────────
@@ -17,9 +18,18 @@ export default function App() {
   const [emails, setEmails] = useState([])
   const [classifications, setClassifications] = useState(new Map())
   const [stagedChanges, setStagedChanges] = useState([])
+  const [exclusions, setExclusions] = useState([])
+  const [labelIndex, setLabelIndex] = useState({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [evalState, setEvalState] = useState({ open: false, loading: false, report: null, error: null })
+
+  // Load persisted exclusions once on mount, dropping any expired snoozes.
+  useEffect(() => {
+    const pruned = exclusionsStore.pruneExpired(exclusionsStore.load())
+    exclusionsStore.save(pruned)
+    setExclusions(pruned)
+  }, [])
 
   // Initialize Google Auth once clientId is set
   useEffect(() => {
@@ -46,16 +56,24 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      // 1. Fetch emails
-      const fetched = await fetchInboxEmails(token, 100)
+      // 1. Fetch emails + the live label name→ID index (for the already-labeled check)
+      const [fetched, idx] = await Promise.all([
+        fetchInboxEmails(token, 100),
+        buildLabelIndex(token),
+      ])
       setEmails(fetched)
+      setLabelIndex(idx)
 
       // 2. Classify with Anthropic
       const cls = await classifyEmails(apiKey, fetched)
       setClassifications(cls)
 
-      // 3. Generate staged changes
-      const { labelChanges, cleanupChanges } = generateStagedChanges(fetched, cls)
+      // 3. Generate staged changes — read exclusions fresh (avoid stale closure)
+      //    and drop expired snoozes before generating.
+      const activeExclusions = exclusionsStore.pruneExpired(exclusionsStore.load())
+      exclusionsStore.save(activeExclusions)
+      setExclusions(activeExclusions)
+      const { labelChanges, cleanupChanges } = generateStagedChanges(fetched, cls, activeExclusions, Date.now(), idx)
       setStagedChanges([...labelChanges, ...cleanupChanges])
     } catch (err) {
       console.error(err)
@@ -113,12 +131,40 @@ export default function App() {
     }
   }
 
-  // Skip a staged change (keep email as-is)
-  function handleSkip(change) {
-    if (!change) return
-    setStagedChanges((prev) =>
-      prev.map((c) => (c.id === change.id ? { ...c, status: 'skipped' } : c))
-    )
+  // Recompute staged changes from current emails/classifications for a given
+  // exclusion set, preserving the status of any change already approved/skipped
+  // so we never re-stage (or re-apply) something the user already acted on.
+  const regenerate = useCallback((nextExclusions) => {
+    setStagedChanges((prev) => {
+      const prevById = new Map(prev.map((c) => [c.id, c]))
+      const { labelChanges, cleanupChanges } = generateStagedChanges(
+        emails, classifications, nextExclusions, Date.now(), labelIndex
+      )
+      return [...labelChanges, ...cleanupChanges].map((c) => {
+        const old = prevById.get(c.id)
+        return old && old.status !== 'pending' ? { ...c, status: old.status } : c
+      })
+    })
+  }, [emails, classifications, labelIndex])
+
+  // "Leave as-is": persist an exclusion for this email and re-generate staged
+  // changes so its pending items disappear immediately.
+  function handleExclude(email, mode, until) {
+    if (!email) return
+    const target = { type: 'message', value: email.id, label: email.subject }
+    const next = exclusionsStore.add(exclusions, { target, mode, until })
+    exclusionsStore.save(next)
+    setExclusions(next)
+    regenerate(next)
+  }
+
+  // Undo an exclusion (remove from the Excluded panel) and re-stage anything it
+  // was suppressing.
+  function handleRemoveExclusion(id) {
+    const next = exclusionsStore.remove(exclusions, id)
+    exclusionsStore.save(next)
+    setExclusions(next)
+    regenerate(next)
   }
 
   // Approve all changes in a batch
@@ -167,11 +213,13 @@ export default function App() {
         classifications={classifications}
         stagedChanges={stagedChanges}
         onApprove={handleApprove}
-        onSkip={handleSkip}
+        onExclude={handleExclude}
         onApproveAll={handleApproveAll}
         onRefresh={handleRefresh}
         loading={loading}
         onSignOut={handleSignOut}
+        exclusions={exclusions}
+        onRemoveExclusion={handleRemoveExclusion}
       />
       <button
         onClick={handleRunEval}

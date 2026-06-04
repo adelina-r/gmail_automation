@@ -7,7 +7,7 @@ export default function CategorySection({
   classifications,
   stagedChanges,
   onApprove,
-  onSkip,
+  onExclude,
   onApproveAll,
 }) {
   const [collapsed, setCollapsed] = useState(false)
@@ -50,7 +50,7 @@ export default function CategorySection({
                 classification={classifications.get(email.id)}
                 action={change}
                 onApprove={() => onApprove(change)}
-                onSkip={() => onSkip(change)}
+                onExclude={onExclude}
               />
             )
           })}

@@ -1,6 +1,7 @@
 import { formatDate } from '../lib/utils.js'
+import LeaveAsIsMenu from './LeaveAsIsMenu.jsx'
 
-export default function EmailCard({ email, classification, action, onApprove, onSkip }) {
+export default function EmailCard({ email, classification, action, onApprove, onExclude }) {
   return (
     <div style={styles.card}>
       <div style={styles.main}>
@@ -26,9 +27,7 @@ export default function EmailCard({ email, classification, action, onApprove, on
              action.action === 'trash' ? 'Delete' :
              action.action === 'archive' ? 'Archive' : 'Apply'}
           </button>
-          <button style={styles.skipBtn} onClick={() => onSkip(email.id)}>
-            Skip
-          </button>
+          <LeaveAsIsMenu onExclude={(mode, until) => onExclude(email, mode, until)} />
         </div>
       )}
     </div>
@@ -93,13 +92,5 @@ const styles = {
     fontSize: '12px',
     fontWeight: 600,
     whiteSpace: 'nowrap',
-  },
-  skipBtn: {
-    padding: '5px 12px',
-    background: 'transparent',
-    color: 'var(--text-secondary)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius)',
-    fontSize: '12px',
   },
 }

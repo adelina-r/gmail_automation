@@ -5,6 +5,8 @@
  * These are used to auto-generate staged changes after classification.
  */
 
+import { isExcluded } from './exclusions.js'
+
 /**
  * Sender-based overrides. These bypass the AI classifier for known senders —
  * cheaper and deterministic (per categorization-feedback.md §G). A rule either
@@ -278,9 +280,18 @@ function makeChange(ruleId, email, action, label, reason) {
  *
  * @param {Array} emails - parsed email objects
  * @param {Map} classifications - Map<id, {category, reason, eventDate}>
+ * @param {Array} exclusions - active exclusion entries (see lib/exclusions.js).
+ *   Excluded/snoozed mail is suppressed entirely: no label, cleanup, or
+ *   decay-trash change is staged for it.
+ * @param {number} now - Date.now(), injectable for tests (drives decay + snooze).
+ * @param {Object} labelIndex - map of lowercased label NAME → label ID, built
+ *   from the live Gmail label list. Used for the already-labeled check: we
+ *   compare the resolved target label ID against `email.labelIds` (which holds
+ *   IDs, not names). A label not in the index (e.g. a not-yet-created NEW label)
+ *   is treated as "not present" so it still stages.
  * @returns {{ labelChanges: StagedChange[], cleanupChanges: StagedChange[] }}
  */
-export function generateStagedChanges(emails, classifications) {
+export function generateStagedChanges(emails, classifications, exclusions = [], now = Date.now(), labelIndex = {}) {
   const labelChanges = []
   const cleanupChanges = []
 
@@ -288,9 +299,13 @@ export function generateStagedChanges(emails, classifications) {
     const cls = classifications.get(email.id)
     if (!cls) continue
 
+    // Persistent "Leave as-is": suppress all staged changes for excluded/snoozed
+    // mail (label, cleanup, AND decay-trash) so the app stops re-nagging.
+    if (isExcluded(email, exclusions, now)) continue
+
     // Time-decay: if transient mail is past its useful life, stage a trash and
     // skip labeling — no point filing something we're suggesting to delete.
-    if (shouldDecayTrash(email, cls)) {
+    if (shouldDecayTrash(email, cls, now)) {
       cleanupChanges.push(makeChange('decay-trash', email, 'trash', null, decayReason(email, cls)))
       continue
     }
@@ -299,10 +314,12 @@ export function generateStagedChanges(emails, classifications) {
     for (const rule of LABEL_RULES) {
       if (!rule.enabled) continue
       if (cls.category !== rule.category) continue
-      // Don't re-label if already has this label
-      const alreadyLabeled = email.labelIds.some(
-        (id) => id.toLowerCase().includes(rule.label.toLowerCase())
-      )
+      // Don't re-label if the email already carries the target label. Gmail's
+      // email.labelIds are label IDs, so resolve the rule's label NAME → ID via
+      // labelIndex and compare by ID. (The old name-substring compare never
+      // matched custom labels, which re-staged already-filed mail every run.)
+      const targetId = labelIndex[rule.label.toLowerCase()]
+      const alreadyLabeled = targetId ? email.labelIds.includes(targetId) : false
       if (alreadyLabeled) continue
       labelChanges.push(makeChange(rule.id, email, 'label', rule.label, cls.reason))
     }
