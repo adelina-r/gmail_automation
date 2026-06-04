@@ -4,7 +4,7 @@ import InboxDigest from './components/InboxDigest.jsx'
 import EvalPanel from './components/EvalPanel.jsx'
 import { initGoogleAuth, requestGmailAccess, getStoredToken, clearStoredToken, executeStagedChange, fetchInboxForReview, buildLabelIndex } from './lib/gmail.js'
 import { classifyEmails } from './lib/anthropic.js'
-import { generateStagedChanges, LABEL_RULES } from './lib/rules.js'
+import { generateStagedChanges, makeManualTrash, LABEL_RULES } from './lib/rules.js'
 import * as exclusionsStore from './lib/exclusions.js'
 import * as correctionsStore from './lib/corrections.js'
 import { runLabelEval } from './lib/eval.js'
@@ -169,13 +169,22 @@ export default function App() {
   const regenerate = useCallback((nextExclusions, nextClassifications = classifications) => {
     setStagedChanges((prev) => {
       const prevById = new Map(prev.map((c) => [c.id, c]))
+      // Manual "🗑 Trash it" changes aren't derived from classification, so
+      // generateStagedChanges won't recreate them — carry them over verbatim, and
+      // let them win over any generated change for the same email (the user chose to
+      // trash it, not label/cleanup it).
+      const manualTrashes = prev.filter((c) => c.ruleId === 'manual-trash')
+      const trashedIds = new Set(manualTrashes.map((c) => c.emailId))
       const { labelCreationChanges, labelChanges, cleanupChanges } = generateStagedChanges(
         emails, nextClassifications, nextExclusions, Date.now(), labelIndex
       )
-      return [...labelCreationChanges, ...labelChanges, ...cleanupChanges].map((c) => {
-        const old = prevById.get(c.id)
-        return old && old.status !== 'pending' ? { ...c, status: old.status } : c
-      })
+      const generated = [...labelCreationChanges, ...labelChanges, ...cleanupChanges]
+        .filter((c) => !trashedIds.has(c.emailId))
+        .map((c) => {
+          const old = prevById.get(c.id)
+          return old && old.status !== 'pending' ? { ...c, status: old.status } : c
+        })
+      return [...generated, ...manualTrashes]
     })
   }, [emails, classifications, labelIndex])
 
@@ -212,6 +221,21 @@ export default function App() {
     const derived = correctionsStore.applyToClassifications(baseClassifications, emails, next)
     setClassifications(derived)
     regenerate(exclusions, derived)
+  }
+
+  // "🗑 Trash it": stage a direct trash for this one message, independent of its
+  // category. Approval-first — this only stages a pending trash; nothing is deleted
+  // until the user approves it. The manual trash supersedes any other PENDING change
+  // for the same email (you chose to trash it, not label/cleanup it); already-approved
+  // changes stay as history. Re-clicking is idempotent.
+  function handleTrash(email) {
+    if (!email) return
+    const change = makeManualTrash(email)
+    setStagedChanges((prev) => {
+      const kept = prev.filter((c) => c.emailId !== email.id || c.status !== 'pending')
+      if (kept.some((c) => c.id === change.id)) return kept
+      return [...kept, change]
+    })
   }
 
   // Undo a correction (from the Learned rules panel) — re-derive from base.
@@ -271,6 +295,7 @@ export default function App() {
         stagedChanges={stagedChanges}
         onApprove={handleApprove}
         onExclude={handleExclude}
+        onTrash={handleTrash}
         onApproveAll={handleApproveAll}
         onRefresh={handleRefresh}
         loading={loading}

@@ -8,6 +8,7 @@ export default function CategorySection({
   stagedChanges,
   onApprove,
   onExclude,
+  onTrash,
   onApproveAll,
   onMove,
 }) {
@@ -52,6 +53,7 @@ export default function CategorySection({
                 action={change}
                 onApprove={() => onApprove(change)}
                 onExclude={onExclude}
+                onTrash={onTrash}
                 onMove={onMove}
               />
             )

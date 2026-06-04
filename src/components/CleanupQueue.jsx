@@ -4,7 +4,7 @@ import { formatDate } from '../lib/utils.js'
 import LeaveAsIsMenu from './LeaveAsIsMenu.jsx'
 import MoveMenu from './MoveMenu.jsx'
 
-export default function CleanupQueue({ emails, classifications, stagedChanges, onApprove, onExclude, onApproveAll, onMove }) {
+export default function CleanupQueue({ emails, classifications, stagedChanges, onApprove, onExclude, onTrash, onApproveAll, onMove }) {
   const [collapsed, setCollapsed] = useState(false)
 
   const pending = stagedChanges.filter(
@@ -34,7 +34,7 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
           <span style={styles.emoji}>🗑️</span>
           <span style={styles.name}>Cleanup Queue</span>
           <span style={styles.count}>{emails.length}</span>
-          <span style={styles.subtext}>OTPs, promo, newsletters</span>
+          <span style={styles.subtext}>OTPs, promo, newsletters, notifications</span>
         </div>
         <div style={styles.headerRight}>
           {bulkPending.length > 0 && (
@@ -86,6 +86,9 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
                         <div style={styles.rowActions}>
                           {notBulk && <span style={styles.recentTag} title="Recent — not included in “Clear all”">recent</span>}
                           <button style={styles.trashBtn} onClick={() => onApprove(pendingChange)}>{actionLabel}</button>
+                          {onTrash && pendingChange.action !== 'trash' && (
+                            <button style={styles.trashBtn} onClick={() => onTrash(email)} title="Stage this email for trash (deletes only after you approve)">🗑 Trash it</button>
+                          )}
                           {onMove && (
                             <MoveMenu
                               size="sm"
@@ -103,6 +106,9 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
                         // snooze, or exclude it instead.
                         <div style={styles.rowActions}>
                           <span style={styles.noActionTag}>No action</span>
+                          {onTrash && (
+                            <button style={styles.trashBtn} onClick={() => onTrash(email)} title="Stage this email for trash (deletes only after you approve)">🗑 Trash it</button>
+                          )}
                           {onMove && (
                             <MoveMenu
                               size="sm"

@@ -2,7 +2,7 @@ import { formatDate } from '../lib/utils.js'
 import LeaveAsIsMenu from './LeaveAsIsMenu.jsx'
 import MoveMenu from './MoveMenu.jsx'
 
-export default function EmailCard({ email, classification, action, onApprove, onExclude, onMove }) {
+export default function EmailCard({ email, classification, action, onApprove, onExclude, onTrash, onMove }) {
   return (
     <div style={styles.card}>
       <div style={styles.main}>
@@ -35,6 +35,19 @@ export default function EmailCard({ email, classification, action, onApprove, on
             currentCategory={classification?.category}
             sender={email.senderEmail}
           />
+        )}
+        {/* Generic "Trash it": stage a trash for this one message regardless of
+            category. Hidden once it's already staged as a trash (the approve
+            button above then reads "Delete"). Approval-first — nothing deletes
+            on click. */}
+        {onTrash && action?.action !== 'trash' && (
+          <button
+            style={styles.trashBtn}
+            onClick={() => onTrash(email)}
+            title="Stage this email for trash (deletes only after you approve)"
+          >
+            🗑 Trash it
+          </button>
         )}
         <LeaveAsIsMenu onExclude={(mode, until) => onExclude(email, mode, until)} />
       </div>
@@ -99,6 +112,17 @@ const styles = {
     borderRadius: 'var(--radius)',
     fontSize: '12px',
     fontWeight: 600,
+    whiteSpace: 'nowrap',
+  },
+  trashBtn: {
+    padding: '5px 12px',
+    background: 'var(--danger-light)',
+    color: 'var(--danger)',
+    border: '1px solid #fca5a5',
+    borderRadius: 'var(--radius)',
+    fontSize: '12px',
+    fontWeight: 600,
+    cursor: 'pointer',
     whiteSpace: 'nowrap',
   },
 }

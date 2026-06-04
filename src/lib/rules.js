@@ -224,6 +224,21 @@ export const CLEANUP_RULES = [
     minAgeDays: 30, // only stage when older than 30 days
     enabled: true,
   },
+  {
+    // FYI/confirmation mail ("payment received", "new device sign-in", "delivered"):
+    // good to see once, no action, not worth keeping on file. Lifecycle: archive
+    // while fresh (out of the inbox but still findable), then escalate to a staged
+    // trash once it ages past `trashAfterDays` — "archive for now, delete in a week
+    // unless I set it to keep" (keep = Leave as-is, or Move to → keep). The same
+    // threshold gates bulk "Clear all": fresh (still-archive) notifications are
+    // per-row only; the escalated trashes are swept in bulk. Tune the one knob below.
+    id: 'notification-archive',
+    name: 'Archive notifications, trash after a week',
+    category: 'notification',
+    action: 'archive',
+    trashAfterDays: 7, // archive while ≤7d old, then stage trash once older
+    enabled: true,
+  },
 ]
 
 // ── Time-decay config (days) ─────────────────────────────────────────────────
@@ -321,6 +336,18 @@ function makeLabelCreation(labelName) {
   }
 }
 
+/**
+ * Build a staged "trash this one message" change from the generic "🗑 Trash it"
+ * affordance — independent of category/classification. Reuses makeChange + the
+ * existing trash execution path (gmail.js). Approval-first: it stages a pending
+ * trash; nothing is deleted until the user approves it. `ruleId` 'manual-trash'
+ * lets App.jsx recognize + preserve these across re-generation (they aren't
+ * derived from classification, so generateStagedChanges won't recreate them).
+ */
+export function makeManualTrash(email) {
+  return makeChange('manual-trash', email, 'trash', null, 'Manually trashed')
+}
+
 /** Build a staged-change object in the canonical shape. */
 function makeChange(ruleId, email, action, label, reason) {
   return {
@@ -392,15 +419,28 @@ export function generateStagedChanges(emails, classifications, exclusions = [], 
       }
     }
 
-    // Cleanup rules (category-based: otp, statement_notice, promotional, newsletter)
+    // Cleanup rules (category-based: otp, statement_notice, promotional,
+    // newsletter, notification)
     for (const rule of CLEANUP_RULES) {
       if (!rule.enabled) continue
       if (cls.category !== rule.category) continue
-      const change = makeChange(rule.id, email, rule.action, null, cls.reason)
-      // Age-gated rules (e.g. newsletter) always stage a per-row manual action, but
-      // recent mail is excluded from BULK "Clear all" (bulkEligible:false) so we don't
-      // sweep up newsletters the user may still want to read. Older mail bulk-clears.
-      if (rule.minAgeDays != null && (now - email.dateMs) / DAY_MS <= rule.minAgeDays) {
+      const ageDays = (now - email.dateMs) / DAY_MS
+      // Escalation: some mail is archived while fresh, then trashed once it ages out
+      // (notifications — "archive for now, delete after a week"). When escalated, the
+      // suggested action flips archive → trash and the reason explains why.
+      const escalate = rule.trashAfterDays != null && ageDays > rule.trashAfterDays
+      const action = escalate ? 'trash' : rule.action
+      const reason = escalate
+        ? `Notification older than ${rule.trashAfterDays} days — no longer needed`
+        : cls.reason
+      const change = makeChange(rule.id, email, action, null, reason)
+      // Age-gated rules always stage a per-row manual action, but recent mail is
+      // excluded from BULK "Clear all" (bulkEligible:false) so we don't sweep up
+      // newsletters/notifications the user may still want. For escalation rules the
+      // SAME threshold gates bulk: while still in the archive window it's per-row
+      // only; once escalated to trash it bulk-clears. Older mail bulk-clears.
+      const bulkGate = rule.minAgeDays ?? rule.trashAfterDays
+      if (bulkGate != null && ageDays <= bulkGate) {
         change.bulkEligible = false
       }
       cleanupChanges.push(change)

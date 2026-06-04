@@ -23,13 +23,14 @@ export const CATEGORIES = {
   promotional:          { label: 'Promotional',    emoji: '🛍️', color: '#6b7280', bg: '#f9fafb' },
   newsletter:           { label: 'Newsletter',     emoji: '📰', color: '#6b7280', bg: '#f9fafb' },
   statement_notice:     { label: 'Statements',     emoji: '🗑️', color: '#6b7280', bg: '#f9fafb' },
+  notification:         { label: 'Notifications',  emoji: '🔔', color: '#6b7280', bg: '#f9fafb' },
   other:                { label: 'Other',          emoji: '📬', color: '#6b7280', bg: '#f9fafb' },
 }
 
 // Categories that get grouped into the "Cleanup Queue" (disposable noise).
 // NOTE: shipping_orders & scheduling_reminders are DIGEST categories, not here —
 // they file to a label and decay to a staged trash by age/event-date (see rules.js).
-export const CLEANUP_CATEGORIES = new Set(['otp', 'promotional', 'newsletter', 'statement_notice'])
+export const CLEANUP_CATEGORIES = new Set(['otp', 'promotional', 'newsletter', 'statement_notice', 'notification'])
 
 const SYSTEM_PROMPT = `You are an email classifier for one person, Adelina. For each email, return a JSON classification.
 
@@ -40,13 +41,14 @@ Categories:
 - travel: flight, hotel, car rental, travel loyalty programs (Virgin Atlantic, Aer Lingus, Hilton, SAS, etc.)
 - financial: bank, credit-card, or investment mail worth keeping that is NOT insurance, medical, or tax — payment confirmations, investment updates, account notices (Barclays, diversificapital, etc.). Keep-worthy.
 - school: school newsletters, tutoring, extracurriculars, kids' activities (AoPS, Schoology, dance, sports, etc.)
-- shipping_orders: order confirmations, "shipped"/in-transit/delivery and tracking updates, "card ready to ship", return approvals (UPS, Amazon shipment-tracking, Lands End, Gap orders, Happy Returns, Amex card shipping). NOT promotional offers.
+- shipping_orders: order confirmations, "shipped"/in-transit/"out for delivery" and tracking updates, "card ready to ship", return approvals (UPS, Amazon shipment-tracking, Lands End, Gap orders, Happy Returns, Amex card shipping). Something is still in motion / worth tracking. NOT promotional offers, and NOT a bare "delivered, nothing left to track" confirmation (that's notification).
 - scheduling_reminders: appointment confirmations/reminders, meeting or Zoom links, payment reminders, and calendar invites — anything time-bound that becomes useless once its date passes (Apple Genius Bar, Midi "visit booked/rescheduled", upcoming-payment reminders).
 - keep: items to retain safely with no action — gift cards, eGift card info, vouchers, codes worth keeping (Cashstar, eGift details).
 - otp: one-time passwords, verification codes, password resets, login codes.
 - promotional: retail sale emails, discount offers, promotional marketing (Nordstrom, Bloomingdale's, Amazon, Ulta, etc.)
 - newsletter: regular reading newsletters the person appears to value (NOT promotional offers).
 - statement_notice: low-value "your statement is ready / available to view" notifications with no action and nothing to keep (e.g. a bank "new statement" notice). Disposable noise — distinct from financial, which is keep-worthy.
+- notification: FYI/confirmation messages that are good to see once but need no action and shouldn't be kept on file — e.g. "payment received / payment successful", "you signed in from a new device / new login", "your package was delivered", "password changed", "profile/settings updated". They confirm something that ALREADY happened. Boundaries: NOT action_needed (a confirmation is the opposite of a to-do — there's nothing for Adelina to do); NOT otp (a login CODE to type in is otp, but a "new device signed in" ALERT is notification); NOT shipping_orders (an in-transit/"shipped"/"out for delivery"/tracking update is shipping_orders, but a bare "delivered, nothing left to track" confirmation is notification); NOT statement_notice ("your statement is ready to view" is statement_notice, but "payment received/processed" is notification); NOT financial (a bank/credit-card/investment confirmation worth KEEPING for your records — Barclays, diversificapital — stays financial, but a transactional service/app FYI you wouldn't file is notification).
 - other: anything that doesn't fit the above — including "new message/notes in your portal" notifications.
 
 Guidance:
