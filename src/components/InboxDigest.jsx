@@ -1,5 +1,6 @@
 import CategorySection from './CategorySection.jsx'
 import CleanupQueue from './CleanupQueue.jsx'
+import ExcludedPanel from './ExcludedPanel.jsx'
 import { CATEGORIES, CLEANUP_CATEGORIES } from '../lib/anthropic.js'
 
 // Categories shown as full sections (not cleanup), in display order.
@@ -22,11 +23,13 @@ export default function InboxDigest({
   classifications,
   stagedChanges,
   onApprove,
-  onSkip,
+  onExclude,
   onApproveAll,
   onRefresh,
   loading,
   onSignOut,
+  exclusions,
+  onRemoveExclusion,
 }) {
   // Group emails by classification
   const grouped = {}
@@ -101,6 +104,7 @@ export default function InboxDigest({
           </div>
         ) : (
           <div style={styles.sections}>
+            <ExcludedPanel exclusions={exclusions} onRemove={onRemoveExclusion} />
             {orderedCats.map((cat) => (
               <CategorySection
                 key={cat}
@@ -111,7 +115,7 @@ export default function InboxDigest({
                   (c) => grouped[cat]?.some((e) => e.id === c.emailId)
                 )}
                 onApprove={onApprove}
-                onSkip={onSkip}
+                onExclude={onExclude}
                 onApproveAll={onApproveAll}
               />
             ))}
@@ -124,7 +128,7 @@ export default function InboxDigest({
                   cleanupEmails.some((e) => e.id === c.emailId)
                 )}
                 onApprove={onApprove}
-                onSkip={onSkip}
+                onExclude={onExclude}
                 onApproveAll={onApproveAll}
               />
             )}

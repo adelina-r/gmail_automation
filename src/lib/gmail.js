@@ -97,6 +97,20 @@ export async function fetchLabels(token) {
   return data.labels ?? []
 }
 
+/**
+ * Fetch labels and return a map of lowercased label NAME → label ID.
+ * Used by generateStagedChanges to detect already-labeled mail by ID
+ * (email.labelIds holds IDs, not names).
+ */
+export async function buildLabelIndex(token) {
+  const labels = await fetchLabels(token)
+  const index = {}
+  for (const l of labels) {
+    if (l.name) index[l.name.toLowerCase()] = l.id
+  }
+  return index
+}
+
 export async function findOrCreateLabel(token, name) {
   const labels = await fetchLabels(token)
   const existing = labels.find(

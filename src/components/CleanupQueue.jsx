@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { CATEGORIES } from '../lib/anthropic.js'
 import { formatDate } from '../lib/utils.js'
+import LeaveAsIsMenu from './LeaveAsIsMenu.jsx'
 
-export default function CleanupQueue({ emails, classifications, stagedChanges, onApprove, onSkip, onApproveAll }) {
+export default function CleanupQueue({ emails, classifications, stagedChanges, onApprove, onExclude, onApproveAll }) {
   const [collapsed, setCollapsed] = useState(false)
 
   const pending = stagedChanges.filter(
@@ -64,7 +65,7 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
                       {change ? (
                         <div style={styles.rowActions}>
                           <button style={styles.trashBtn} onClick={() => onApprove(change)}>Delete</button>
-                          <button style={styles.skipBtn} onClick={() => onSkip(change)}>Keep</button>
+                          <LeaveAsIsMenu size="sm" onExclude={(mode, until) => onExclude(email, mode, until)} />
                         </div>
                       ) : (
                         <span style={styles.doneTag}>✓</span>
@@ -170,14 +171,6 @@ const styles = {
     borderRadius: 'var(--radius)',
     fontSize: '11px',
     fontWeight: 600,
-  },
-  skipBtn: {
-    padding: '3px 8px',
-    background: 'transparent',
-    color: 'var(--text-muted)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius)',
-    fontSize: '11px',
   },
   doneTag: { fontSize: '11px', color: 'var(--success)' },
 }
