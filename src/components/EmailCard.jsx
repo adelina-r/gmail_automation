@@ -1,7 +1,8 @@
 import { formatDate } from '../lib/utils.js'
 import LeaveAsIsMenu from './LeaveAsIsMenu.jsx'
+import MoveMenu from './MoveMenu.jsx'
 
-export default function EmailCard({ email, classification, action, onApprove, onExclude }) {
+export default function EmailCard({ email, classification, action, onApprove, onExclude, onMove }) {
   return (
     <div style={styles.card}>
       <div style={styles.main}>
@@ -20,16 +21,23 @@ export default function EmailCard({ email, classification, action, onApprove, on
         )}
       </div>
 
-      {action && (
-        <div style={styles.actions}>
+      <div style={styles.actions}>
+        {action && (
           <button style={styles.approveBtn} onClick={() => onApprove(email.id)}>
             {action.action === 'label' ? `Label: ${action.label}` :
              action.action === 'trash' ? 'Delete' :
              action.action === 'archive' ? 'Archive' : 'Apply'}
           </button>
-          <LeaveAsIsMenu onExclude={(mode, until) => onExclude(email, mode, until)} />
-        </div>
-      )}
+        )}
+        {onMove && (
+          <MoveMenu
+            onMove={(cat, scope) => onMove(email, cat, scope)}
+            currentCategory={classification?.category}
+            sender={email.senderEmail}
+          />
+        )}
+        <LeaveAsIsMenu onExclude={(mode, until) => onExclude(email, mode, until)} />
+      </div>
     </div>
   )
 }

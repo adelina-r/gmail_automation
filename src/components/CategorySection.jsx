@@ -9,6 +9,7 @@ export default function CategorySection({
   onApprove,
   onExclude,
   onApproveAll,
+  onMove,
 }) {
   const [collapsed, setCollapsed] = useState(false)
 
@@ -51,6 +52,7 @@ export default function CategorySection({
                 action={change}
                 onApprove={() => onApprove(change)}
                 onExclude={onExclude}
+                onMove={onMove}
               />
             )
           })}
