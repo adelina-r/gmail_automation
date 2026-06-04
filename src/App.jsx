@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback } from 'react'
 import LoginScreen from './components/LoginScreen.jsx'
 import InboxDigest from './components/InboxDigest.jsx'
 import EvalPanel from './components/EvalPanel.jsx'
-import { initGoogleAuth, requestGmailAccess, getStoredToken, clearStoredToken, executeStagedChange, fetchInboxEmails, buildLabelIndex } from './lib/gmail.js'
+import { initGoogleAuth, requestGmailAccess, getStoredToken, clearStoredToken, executeStagedChange, fetchInboxForReview, buildLabelIndex } from './lib/gmail.js'
 import { classifyEmails } from './lib/anthropic.js'
-import { generateStagedChanges } from './lib/rules.js'
+import { generateStagedChanges, LABEL_RULES } from './lib/rules.js'
 import * as exclusionsStore from './lib/exclusions.js'
+import * as correctionsStore from './lib/corrections.js'
 import { runLabelEval } from './lib/eval.js'
 
 // ── Configuration ────────────────────────────────────────────────────────────
@@ -16,9 +17,14 @@ export default function App() {
   const [clientId, setClientId] = useState(DEFAULT_CLIENT_ID)
   const [accessToken, setAccessToken] = useState(() => getStoredToken())
   const [emails, setEmails] = useState([])
+  // baseClassifications = raw classifier output; classifications = base with user
+  // corrections (moves + learned sender rules) applied. Keeping base separate lets
+  // "undo a correction" re-derive without re-fetching/re-classifying.
+  const [baseClassifications, setBaseClassifications] = useState(new Map())
   const [classifications, setClassifications] = useState(new Map())
   const [stagedChanges, setStagedChanges] = useState([])
   const [exclusions, setExclusions] = useState([])
+  const [corrections, setCorrections] = useState([])
   const [labelIndex, setLabelIndex] = useState({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -29,6 +35,11 @@ export default function App() {
     const pruned = exclusionsStore.pruneExpired(exclusionsStore.load())
     exclusionsStore.save(pruned)
     setExclusions(pruned)
+  }, [])
+
+  // Load persisted corrections (moves + learned sender rules) once on mount.
+  useEffect(() => {
+    setCorrections(correctionsStore.load())
   }, [])
 
   // Initialize Google Auth once clientId is set
@@ -56,25 +67,45 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      // 1. Fetch emails + the live label name→ID index (for the already-labeled check)
-      const [fetched, idx] = await Promise.all([
-        fetchInboxEmails(token, 100),
-        buildLabelIndex(token),
-      ])
-      setEmails(fetched)
+      const now = Date.now()
+
+      // 1. Live label index first — needed to tell which mail is already filed under
+      //    one of OUR managed labels so we can skip it while fetching.
+      const idx = await buildLabelIndex(token)
       setLabelIndex(idx)
 
-      // 2. Classify with Anthropic
-      const cls = await classifyEmails(apiKey, fetched)
-      setClassifications(cls)
-
-      // 3. Generate staged changes — read exclusions fresh (avoid stale closure)
-      //    and drop expired snoozes before generating.
+      // Active exclusions (drop expired snoozes) — also used to skip snoozed mail.
       const activeExclusions = exclusionsStore.pruneExpired(exclusionsStore.load())
       exclusionsStore.save(activeExclusions)
       setExclusions(activeExclusions)
-      const { labelChanges, cleanupChanges } = generateStagedChanges(fetched, cls, activeExclusions, Date.now(), idx)
-      setStagedChanges([...labelChanges, ...cleanupChanges])
+
+      // 2. Fetch ~100 emails worth reviewing, paging past mail that's already
+      //    handled: filed under one of our managed labels, or snoozed/excluded.
+      //    Managed labels are matched by ID — this never matches Gmail's auto
+      //    Promotions/Social/Updates/Forums categories (their CATEGORY_* ids aren't
+      //    in this set), so those still get reviewed normally.
+      const managedLabelIds = new Set(
+        LABEL_RULES.map((r) => idx[r.label.toLowerCase()]).filter(Boolean)
+      )
+      const keep = (email) =>
+        !email.labelIds.some((id) => managedLabelIds.has(id)) &&
+        !exclusionsStore.isExcluded(email, activeExclusions, now)
+      const fetched = await fetchInboxForReview(token, { target: 100, keep })
+      setEmails(fetched)
+
+      // 3. Classify with Anthropic, then apply persisted corrections on top so
+      //    manual moves + learned sender rules survive reload/Refresh.
+      const base = await classifyEmails(apiKey, fetched)
+      setBaseClassifications(base)
+      const activeCorrections = correctionsStore.load()
+      setCorrections(activeCorrections)
+      const cls = correctionsStore.applyToClassifications(base, fetched, activeCorrections)
+      setClassifications(cls)
+
+      // 4. Generate staged changes. Creation changes go first so "Create new
+      //    labels" is acted on before labeling.
+      const { labelCreationChanges, labelChanges, cleanupChanges } = generateStagedChanges(fetched, cls, activeExclusions, now, idx)
+      setStagedChanges([...labelCreationChanges, ...labelChanges, ...cleanupChanges])
     } catch (err) {
       console.error(err)
       setError(err.message)
@@ -91,6 +122,7 @@ export default function App() {
     clearStoredToken()
     setAccessToken(null)
     setEmails([])
+    setBaseClassifications(new Map())
     setClassifications(new Map())
     setStagedChanges([])
   }
@@ -134,13 +166,13 @@ export default function App() {
   // Recompute staged changes from current emails/classifications for a given
   // exclusion set, preserving the status of any change already approved/skipped
   // so we never re-stage (or re-apply) something the user already acted on.
-  const regenerate = useCallback((nextExclusions) => {
+  const regenerate = useCallback((nextExclusions, nextClassifications = classifications) => {
     setStagedChanges((prev) => {
       const prevById = new Map(prev.map((c) => [c.id, c]))
-      const { labelChanges, cleanupChanges } = generateStagedChanges(
-        emails, classifications, nextExclusions, Date.now(), labelIndex
+      const { labelCreationChanges, labelChanges, cleanupChanges } = generateStagedChanges(
+        emails, nextClassifications, nextExclusions, Date.now(), labelIndex
       )
-      return [...labelChanges, ...cleanupChanges].map((c) => {
+      return [...labelCreationChanges, ...labelChanges, ...cleanupChanges].map((c) => {
         const old = prevById.get(c.id)
         return old && old.status !== 'pending' ? { ...c, status: old.status } : c
       })
@@ -165,6 +197,31 @@ export default function App() {
     exclusionsStore.save(next)
     setExclusions(next)
     regenerate(next)
+  }
+
+  // "Move to": persist the correction, re-derive classifications from the raw
+  // classifier output, and re-stage so the email immediately moves to its new
+  // category's section/queue (e.g. Other → promotional lands in the Cleanup Queue
+  // with a Delete action). scope 'message' = this email; 'sender' = a learned rule.
+  function handleMove(email, toCategory, scope) {
+    if (!email || !toCategory) return
+    const from = classifications.get(email.id)?.category ?? null
+    const next = correctionsStore.addMove(corrections, { email, from, to: toCategory, scope })
+    correctionsStore.save(next)
+    setCorrections(next)
+    const derived = correctionsStore.applyToClassifications(baseClassifications, emails, next)
+    setClassifications(derived)
+    regenerate(exclusions, derived)
+  }
+
+  // Undo a correction (from the Learned rules panel) — re-derive from base.
+  function handleRemoveCorrection(id) {
+    const next = correctionsStore.remove(corrections, id)
+    correctionsStore.save(next)
+    setCorrections(next)
+    const derived = correctionsStore.applyToClassifications(baseClassifications, emails, next)
+    setClassifications(derived)
+    regenerate(exclusions, derived)
   }
 
   // Approve all changes in a batch
@@ -220,6 +277,10 @@ export default function App() {
         onSignOut={handleSignOut}
         exclusions={exclusions}
         onRemoveExclusion={handleRemoveExclusion}
+        labelIndex={labelIndex}
+        onMove={handleMove}
+        learnedRules={correctionsStore.senderRules(corrections)}
+        onRemoveCorrection={handleRemoveCorrection}
       />
       <button
         onClick={handleRunEval}

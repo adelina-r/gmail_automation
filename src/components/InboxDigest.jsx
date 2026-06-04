@@ -1,7 +1,12 @@
 import CategorySection from './CategorySection.jsx'
 import CleanupQueue from './CleanupQueue.jsx'
 import ExcludedPanel from './ExcludedPanel.jsx'
+import FiledPanel from './FiledPanel.jsx'
+import LearnedRulesPanel from './LearnedRulesPanel.jsx'
+import NewLabelsBanner from './NewLabelsBanner.jsx'
 import { CATEGORIES, CLEANUP_CATEGORIES } from '../lib/anthropic.js'
+import { isFiled } from '../lib/rules.js'
+import { isExcluded } from '../lib/exclusions.js'
 
 // Categories shown as full sections (not cleanup), in display order.
 // Time-sensitive buckets (scheduling, shipping) sit near the top; cleanup
@@ -30,13 +35,32 @@ export default function InboxDigest({
   onSignOut,
   exclusions,
   onRemoveExclusion,
+  labelIndex,
+  onMove,
+  learnedRules,
+  onRemoveCorrection,
 }) {
-  // Group emails by classification
+  // Approval-first new-label creation changes (not tied to an email).
+  const labelCreationChanges = stagedChanges.filter((c) => c.action === 'create-label')
+
+  // Group emails by classification. Mail already filed under its target Gmail
+  // label is pulled out into a collapsed panel (nothing to approve — it just
+  // cluttered the digest every run).
   const grouped = {}
   const cleanupEmails = []
+  const filedEmails = []
+  const now = Date.now()
 
   for (const email of emails) {
     const cls = classifications.get(email.id)
+    // Excluded / snoozed mail is represented in the Excluded panel — keep it out of
+    // the digest + cleanup queue entirely (its staged action is already suppressed),
+    // so "Leave as-is" actually removes the row instead of leaving a dead one behind.
+    if (isExcluded(email, exclusions, now)) continue
+    if (isFiled(email, cls, labelIndex)) {
+      filedEmails.push(email)
+      continue
+    }
     const cat = cls?.category ?? 'other'
     if (CLEANUP_CATEGORIES.has(cat)) {
       cleanupEmails.push(email)
@@ -51,6 +75,7 @@ export default function InboxDigest({
     grouped[cat].sort((a, b) => b.dateMs - a.dateMs)
   }
   cleanupEmails.sort((a, b) => b.dateMs - a.dateMs)
+  filedEmails.sort((a, b) => b.dateMs - a.dateMs)
 
   const pendingCount = stagedChanges.filter((c) => c.status === 'pending').length
 
@@ -104,6 +129,11 @@ export default function InboxDigest({
           </div>
         ) : (
           <div style={styles.sections}>
+            <NewLabelsBanner
+              changes={labelCreationChanges}
+              onApprove={onApprove}
+              onApproveAll={onApproveAll}
+            />
             <ExcludedPanel exclusions={exclusions} onRemove={onRemoveExclusion} />
             {orderedCats.map((cat) => (
               <CategorySection
@@ -117,6 +147,7 @@ export default function InboxDigest({
                 onApprove={onApprove}
                 onExclude={onExclude}
                 onApproveAll={onApproveAll}
+                onMove={onMove}
               />
             ))}
 
@@ -130,8 +161,12 @@ export default function InboxDigest({
                 onApprove={onApprove}
                 onExclude={onExclude}
                 onApproveAll={onApproveAll}
+                onMove={onMove}
               />
             )}
+
+            <LearnedRulesPanel rules={learnedRules} onRemove={onRemoveCorrection} />
+            <FiledPanel emails={filedEmails} classifications={classifications} />
           </div>
         )}
       </main>

@@ -2,13 +2,17 @@ import { useState } from 'react'
 import { CATEGORIES } from '../lib/anthropic.js'
 import { formatDate } from '../lib/utils.js'
 import LeaveAsIsMenu from './LeaveAsIsMenu.jsx'
+import MoveMenu from './MoveMenu.jsx'
 
-export default function CleanupQueue({ emails, classifications, stagedChanges, onApprove, onExclude, onApproveAll }) {
+export default function CleanupQueue({ emails, classifications, stagedChanges, onApprove, onExclude, onApproveAll, onMove }) {
   const [collapsed, setCollapsed] = useState(false)
 
   const pending = stagedChanges.filter(
     (c) => c.status === 'pending' && emails.some((e) => e.id === c.emailId)
   )
+  // Bulk "Clear all" only sweeps bulk-eligible changes — recent age-gated mail
+  // (e.g. newsletters <30d) is staged with bulkEligible:false and cleared per-row only.
+  const bulkPending = pending.filter((c) => c.bulkEligible !== false)
 
   // Group by sub-category for display
   const byCat = {}
@@ -18,6 +22,10 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
     if (!byCat[cat]) byCat[cat] = []
     byCat[cat].push(email)
   }
+
+  // Bulk-eligible pending changes for one sub-category (drives its "Clear all").
+  const catBulkPending = (catEmails) =>
+    bulkPending.filter((c) => catEmails.some((e) => e.id === c.emailId))
 
   return (
     <section style={styles.section}>
@@ -29,12 +37,12 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
           <span style={styles.subtext}>OTPs, promo, newsletters</span>
         </div>
         <div style={styles.headerRight}>
-          {pending.length > 0 && (
+          {bulkPending.length > 0 && (
             <button
               style={styles.deleteAllBtn}
-              onClick={(e) => { e.stopPropagation(); onApproveAll(pending) }}
+              onClick={(e) => { e.stopPropagation(); onApproveAll(bulkPending) }}
             >
-              Delete all ({pending.length})
+              Clear all ({bulkPending.length})
             </button>
           )}
           <span style={styles.chevron}>{collapsed ? '›' : '⌄'}</span>
@@ -43,15 +51,27 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
 
       {!collapsed && (
         <div>
-          {Object.entries(byCat).map(([cat, catEmails]) => (
+          {Object.entries(byCat).map(([cat, catEmails]) => {
+            const catPending = catBulkPending(catEmails)
+            return (
             <div key={cat}>
               <div style={styles.subheader}>
-                {CATEGORIES[cat]?.emoji} {CATEGORIES[cat]?.label ?? cat} ({catEmails.length})
+                <span>{CATEGORIES[cat]?.emoji} {CATEGORIES[cat]?.label ?? cat} ({catEmails.length})</span>
+                {catPending.length > 0 && (
+                  <button
+                    style={styles.clearCatBtn}
+                    onClick={() => onApproveAll(catPending)}
+                  >
+                    Clear all ({catPending.length})
+                  </button>
+                )}
               </div>
               {catEmails.map((email) => {
-                const change = stagedChanges.find(
-                  (c) => c.emailId === email.id && c.status === 'pending'
-                )
+                const change = stagedChanges.find((c) => c.emailId === email.id)
+                const pendingChange = change?.status === 'pending' ? change : null
+                const actionLabel = pendingChange?.action === 'archive' ? 'Archive' : 'Delete'
+                // Recent age-gated mail: staged for a manual action but kept out of bulk.
+                const notBulk = pendingChange?.bulkEligible === false
                 return (
                   <div key={email.id} style={styles.row}>
                     <div style={styles.rowMain}>
@@ -62,20 +82,44 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
                     </div>
                     <div style={styles.rowMeta}>
                       <span style={styles.rowDate}>{formatDate(email.dateMs)}</span>
-                      {change ? (
+                      {pendingChange ? (
                         <div style={styles.rowActions}>
-                          <button style={styles.trashBtn} onClick={() => onApprove(change)}>Delete</button>
+                          {notBulk && <span style={styles.recentTag} title="Recent — not included in “Clear all”">recent</span>}
+                          <button style={styles.trashBtn} onClick={() => onApprove(pendingChange)}>{actionLabel}</button>
+                          {onMove && (
+                            <MoveMenu
+                              size="sm"
+                              onMove={(cat, scope) => onMove(email, cat, scope)}
+                              currentCategory={classifications.get(email.id)?.category}
+                              sender={email.senderEmail}
+                            />
+                          )}
                           <LeaveAsIsMenu size="sm" onExclude={(mode, until) => onExclude(email, mode, until)} />
                         </div>
+                      ) : change?.status === 'approved' ? (
+                        <span style={styles.doneTag}>✓ Done</span>
                       ) : (
-                        <span style={styles.doneTag}>✓</span>
+                        // No staged action: don't imply "done" — let the user move,
+                        // snooze, or exclude it instead.
+                        <div style={styles.rowActions}>
+                          <span style={styles.noActionTag}>No action</span>
+                          {onMove && (
+                            <MoveMenu
+                              size="sm"
+                              onMove={(cat, scope) => onMove(email, cat, scope)}
+                              currentCategory={classifications.get(email.id)?.category}
+                              sender={email.senderEmail}
+                            />
+                          )}
+                          <LeaveAsIsMenu size="sm" onExclude={(mode, until) => onExclude(email, mode, until)} />
+                        </div>
                       )}
                     </div>
                   </div>
                 )
               })}
             </div>
-          ))}
+          )})}
         </div>
       )}
     </section>
@@ -123,12 +167,25 @@ const styles = {
   },
   chevron: { fontSize: '16px', color: 'var(--text-muted)' },
   subheader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     padding: '8px 16px',
     fontSize: '12px',
     fontWeight: 600,
     color: 'var(--text-secondary)',
     background: '#fafafa',
     borderTop: '1px solid var(--border)',
+  },
+  clearCatBtn: {
+    padding: '3px 8px',
+    background: 'transparent',
+    color: 'var(--danger)',
+    border: '1px solid #fca5a5',
+    borderRadius: 'var(--radius)',
+    fontSize: '11px',
+    fontWeight: 600,
+    cursor: 'pointer',
   },
   row: {
     display: 'flex',
@@ -173,4 +230,13 @@ const styles = {
     fontWeight: 600,
   },
   doneTag: { fontSize: '11px', color: 'var(--success)' },
+  noActionTag: { fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' },
+  recentTag: {
+    fontSize: '10px',
+    color: 'var(--text-muted)',
+    background: 'var(--bg)',
+    border: '1px solid var(--border)',
+    borderRadius: '8px',
+    padding: '1px 6px',
+  },
 }

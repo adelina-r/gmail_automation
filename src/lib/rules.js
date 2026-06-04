@@ -205,6 +205,25 @@ export const CLEANUP_RULES = [
     action: 'archive',
     enabled: true,
   },
+  {
+    // Highest-volume junk — trash on approval. No age gate: a promo is disposable
+    // the moment it arrives.
+    id: 'promotional-trash',
+    name: 'Delete promotional / marketing emails',
+    category: 'promotional',
+    action: 'trash',
+    enabled: true,
+  },
+  {
+    // Newsletters are reading material the user may value, so we don't trash them
+    // and we only archive once they've aged out of the inbox (like shipping decay).
+    id: 'newsletter-archive',
+    name: 'Archive older newsletters',
+    category: 'newsletter',
+    action: 'archive',
+    minAgeDays: 30, // only stage when older than 30 days
+    enabled: true,
+  },
 ]
 
 // ── Time-decay config (days) ─────────────────────────────────────────────────
@@ -257,6 +276,51 @@ function decayReason(email, cls) {
   return 'Scheduling reminder older than 30 days'
 }
 
+/**
+ * Is this email already filed under the Gmail label its category would apply?
+ * Shared by `generateStagedChanges` (don't re-stage already-filed mail) and the
+ * digest UI (collapse already-filed mail out of the main view). Returns false for
+ * categories with no label rule (e.g. action_needed, other) and for NEW labels not
+ * yet created (absent from labelIndex), so those still appear/stage normally.
+ *
+ * @param {object} email - parsed email; uses email.labelIds (Gmail label IDs)
+ * @param {object} cls - classification {category, ...}
+ * @param {Object} labelIndex - lowercased label NAME → label ID
+ */
+export function isFiled(email, cls, labelIndex = {}) {
+  if (!cls) return false
+  for (const rule of LABEL_RULES) {
+    if (!rule.enabled || cls.category !== rule.category) continue
+    const id = labelIndex[rule.label.toLowerCase()]
+    if (id && (email.labelIds ?? []).includes(id)) return true
+  }
+  return false
+}
+
+/**
+ * Build a one-time, approval-first "create this Gmail label" staged change.
+ * Not tied to a single email (emailId/sender fields are null); `id` is keyed on
+ * the label name so it stays stable across re-generations (status preserved).
+ * Executing it is the ONLY path that creates a label — `label` actions never
+ * create one silently (see gmail.js `executeStagedChange`).
+ */
+function makeLabelCreation(labelName) {
+  return {
+    id: `create-label-${labelName.toLowerCase()}`,
+    ruleId: 'create-label',
+    emailId: null,
+    subject: labelName,
+    senderName: null,
+    senderEmail: null,
+    date: null,
+    dateMs: 0,
+    action: 'create-label',
+    label: labelName,
+    reason: `New label "${labelName}" doesn't exist in your Gmail yet — approve to create it.`,
+    status: 'pending',
+  }
+}
+
 /** Build a staged-change object in the canonical shape. */
 function makeChange(ruleId, email, action, label, reason) {
   return {
@@ -288,12 +352,16 @@ function makeChange(ruleId, email, action, label, reason) {
  *   from the live Gmail label list. Used for the already-labeled check: we
  *   compare the resolved target label ID against `email.labelIds` (which holds
  *   IDs, not names). A label not in the index (e.g. a not-yet-created NEW label)
- *   is treated as "not present" so it still stages.
- * @returns {{ labelChanges: StagedChange[], cleanupChanges: StagedChange[] }}
+ *   is treated as "not present" so it still stages — and we stage a one-time
+ *   approval-first `create-label` change for it (see labelCreationChanges).
+ * @returns {{ labelCreationChanges: StagedChange[], labelChanges: StagedChange[], cleanupChanges: StagedChange[] }}
  */
 export function generateStagedChanges(emails, classifications, exclusions = [], now = Date.now(), labelIndex = {}) {
   const labelChanges = []
   const cleanupChanges = []
+  // Names of NEW labels (referenced by a staged label change but absent from the
+  // live Gmail label index) that need an explicit, approval-first create step.
+  const neededNewLabels = new Set()
 
   for (const email of emails) {
     const cls = classifications.get(email.id)
@@ -310,27 +378,35 @@ export function generateStagedChanges(emails, classifications, exclusions = [], 
       continue
     }
 
-    // Label rules
-    for (const rule of LABEL_RULES) {
-      if (!rule.enabled) continue
-      if (cls.category !== rule.category) continue
-      // Don't re-label if the email already carries the target label. Gmail's
-      // email.labelIds are label IDs, so resolve the rule's label NAME → ID via
-      // labelIndex and compare by ID. (The old name-substring compare never
-      // matched custom labels, which re-staged already-filed mail every run.)
-      const targetId = labelIndex[rule.label.toLowerCase()]
-      const alreadyLabeled = targetId ? email.labelIds.includes(targetId) : false
-      if (alreadyLabeled) continue
-      labelChanges.push(makeChange(rule.id, email, 'label', rule.label, cls.reason))
+    // Label rules — skip entirely if the email already carries its target label.
+    // (Gmail's email.labelIds are IDs; isFiled resolves the rule's label NAME → ID
+    // via labelIndex and compares by ID — a name-substring compare never matched
+    // custom labels, which re-staged already-filed mail every run.)
+    if (!isFiled(email, cls, labelIndex)) {
+      for (const rule of LABEL_RULES) {
+        if (!rule.enabled) continue
+        if (cls.category !== rule.category) continue
+        // Label is referenced but doesn't exist yet → queue an approval-first create.
+        if (!labelIndex[rule.label.toLowerCase()]) neededNewLabels.add(rule.label)
+        labelChanges.push(makeChange(rule.id, email, 'label', rule.label, cls.reason))
+      }
     }
 
-    // Cleanup rules (category-based: otp, statement_notice)
+    // Cleanup rules (category-based: otp, statement_notice, promotional, newsletter)
     for (const rule of CLEANUP_RULES) {
       if (!rule.enabled) continue
       if (cls.category !== rule.category) continue
-      cleanupChanges.push(makeChange(rule.id, email, rule.action, null, cls.reason))
+      const change = makeChange(rule.id, email, rule.action, null, cls.reason)
+      // Age-gated rules (e.g. newsletter) always stage a per-row manual action, but
+      // recent mail is excluded from BULK "Clear all" (bulkEligible:false) so we don't
+      // sweep up newsletters the user may still want to read. Older mail bulk-clears.
+      if (rule.minAgeDays != null && (now - email.dateMs) / DAY_MS <= rule.minAgeDays) {
+        change.bulkEligible = false
+      }
+      cleanupChanges.push(change)
     }
   }
 
-  return { labelChanges, cleanupChanges }
+  const labelCreationChanges = [...neededNewLabels].map(makeLabelCreation)
+  return { labelCreationChanges, labelChanges, cleanupChanges }
 }
