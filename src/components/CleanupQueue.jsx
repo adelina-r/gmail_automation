@@ -4,19 +4,12 @@ import { formatDate } from '../lib/utils.js'
 import LeaveAsIsMenu from './LeaveAsIsMenu.jsx'
 import MoveMenu from './MoveMenu.jsx'
 
-export default function CleanupQueue({ emails, classifications, stagedChanges, onApprove, onExclude, onTrash, onTrashMany, onExcludeMany, onApproveAll, onMove }) {
+export default function CleanupQueue({ emails, classifications, stagedChanges, onApprove, onExclude, onTrashMany, onExcludeMany, onApproveAll, onMove }) {
   const [collapsed, setCollapsed] = useState(false)
-  // Multi-select: ids of rows the user has checked for a batch action. Distinct from
-  // "Clear all" (which sweeps only bulk-eligible mail) — an explicit selection lets you
-  // pick a subset, including recent/age-gated items the age gate would otherwise hold back.
+  // Multi-select is the bulk tool for the Cleanup Queue: check rows (or "Select all"),
+  // then Apply / Trash / Leave-as-is from the selection bar. This replaced the old
+  // global + per-category "Clear all" buttons (too many overlapping disposal controls).
   const [selected, setSelected] = useState(new Set())
-
-  const pending = stagedChanges.filter(
-    (c) => c.status === 'pending' && emails.some((e) => e.id === c.emailId)
-  )
-  // Bulk "Clear all" only sweeps bulk-eligible changes — recent age-gated mail
-  // (e.g. newsletters <30d) is staged with bulkEligible:false and cleared per-row only.
-  const bulkPending = pending.filter((c) => c.bulkEligible !== false)
 
   // Group by sub-category for display
   const byCat = {}
@@ -27,16 +20,13 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
     byCat[cat].push(email)
   }
 
-  // Bulk-eligible pending changes for one sub-category (drives its "Clear all").
-  const catBulkPending = (catEmails) =>
-    bulkPending.filter((c) => catEmails.some((e) => e.id === c.emailId))
-
   // ── Multi-select helpers ─────────────────────────────────────────────────────
   // A row is selectable unless it's already done (approved). Approved rows show ✓.
   const isSelectable = (email) =>
     stagedChanges.find((c) => c.emailId === email.id)?.status !== 'approved'
   const selectableEmails = emails.filter(isSelectable)
   const selectedEmails = selectableEmails.filter((e) => selected.has(e.id))
+  const allSelected = selectableEmails.length > 0 && selectableEmails.every((e) => selected.has(e.id))
 
   function toggle(id) {
     setSelected((prev) => {
@@ -54,10 +44,11 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
       return next
     })
   }
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(selectableEmails.map((e) => e.id)))
   const clearSel = () => setSelected(new Set())
 
-  // "Apply selected": run each checked row's own staged action (archive/trash),
-  // ignoring the age gate since the user picked these explicitly.
+  // "Apply": run each checked row's own staged action (archive/trash), ignoring the
+  // age gate since the user picked these explicitly. Executes immediately.
   function applySelected() {
     const changes = stagedChanges.filter(
       (c) => c.status === 'pending' && selected.has(c.emailId)
@@ -65,10 +56,11 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
     if (changes.length) onApproveAll(changes)
     clearSel()
   }
-  // "🗑 Trash selected": stage a manual trash for each checked row (becomes a pending
-  // Delete). Keep the selection so the user can immediately hit "Apply selected".
+  // "🗑 Trash": force-trash every checked row regardless of its staged action.
+  // onTrashMany stages a manual trash per row AND executes it (see App.handleTrashMany).
   function trashSelected() {
     if (selectedEmails.length) onTrashMany?.(selectedEmails)
+    clearSel()
   }
   // "Leave as-is" on the whole selection.
   function leaveSelected(mode, until) {
@@ -86,13 +78,16 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
           <span style={styles.subtext}>OTPs, promo, newsletters, notifications</span>
         </div>
         <div style={styles.headerRight}>
-          {bulkPending.length > 0 && (
-            <button
-              style={styles.deleteAllBtn}
-              onClick={(e) => { e.stopPropagation(); onApproveAll(bulkPending) }}
-            >
-              Clear all ({bulkPending.length})
-            </button>
+          {!collapsed && selectableEmails.length > 0 && (
+            <label style={styles.selectAll} onClick={(e) => e.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                style={styles.checkbox}
+              />
+              Select all
+            </label>
           )}
           <span style={styles.chevron}>{collapsed ? '›' : '⌄'}</span>
         </div>
@@ -113,7 +108,6 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
       {!collapsed && (
         <div>
           {Object.entries(byCat).map(([cat, catEmails]) => {
-            const catPending = catBulkPending(catEmails)
             const catSelectable = catEmails.filter(isSelectable)
             const allCatSelected = catSelectable.length > 0 && catSelectable.every((e) => selected.has(e.id))
             return (
@@ -131,14 +125,6 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
                   )}
                   {CATEGORIES[cat]?.emoji} {CATEGORIES[cat]?.label ?? cat} ({catEmails.length})
                 </span>
-                {catPending.length > 0 && (
-                  <button
-                    style={styles.clearCatBtn}
-                    onClick={() => onApproveAll(catPending)}
-                  >
-                    Clear all ({catPending.length})
-                  </button>
-                )}
               </div>
               {catEmails.map((email) => {
                 const change = stagedChanges.find((c) => c.emailId === email.id)
@@ -168,11 +154,8 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
                       <span style={styles.rowDate}>{formatDate(email.dateMs)}</span>
                       {pendingChange ? (
                         <div style={styles.rowActions}>
-                          {notBulk && <span style={styles.recentTag} title="Recent — not included in “Clear all”">recent</span>}
+                          {notBulk && <span style={styles.recentTag} title="Recent — review before bulk-trashing">recent</span>}
                           <button style={styles.trashBtn} onClick={() => onApprove(pendingChange)}>{actionLabel}</button>
-                          {onTrash && pendingChange.action !== 'trash' && (
-                            <button style={styles.trashBtn} onClick={() => onTrash(email)} title="Stage this email for trash (deletes only after you approve)">🗑 Trash it</button>
-                          )}
                           {onMove && (
                             <MoveMenu
                               size="sm"
@@ -190,9 +173,6 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
                         // snooze, or exclude it instead.
                         <div style={styles.rowActions}>
                           <span style={styles.noActionTag}>No action</span>
-                          {onTrash && (
-                            <button style={styles.trashBtn} onClick={() => onTrash(email)} title="Stage this email for trash (deletes only after you approve)">🗑 Trash it</button>
-                          )}
                           {onMove && (
                             <MoveMenu
                               size="sm"
@@ -246,14 +226,14 @@ const styles = {
   },
   subtext: { fontSize: '12px', color: 'var(--text-muted)' },
   headerRight: { display: 'flex', alignItems: 'center', gap: '10px' },
-  deleteAllBtn: {
-    padding: '4px 10px',
-    background: 'var(--danger)',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 'var(--radius)',
+  selectAll: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '5px',
     fontSize: '12px',
     fontWeight: 600,
+    color: 'var(--text-secondary)',
+    cursor: 'pointer',
   },
   chevron: { fontSize: '16px', color: 'var(--text-muted)' },
   subheader: {
@@ -310,16 +290,6 @@ const styles = {
     fontWeight: 600,
     cursor: 'pointer',
     marginLeft: 'auto',
-  },
-  clearCatBtn: {
-    padding: '3px 8px',
-    background: 'transparent',
-    color: 'var(--danger)',
-    border: '1px solid #fca5a5',
-    borderRadius: 'var(--radius)',
-    fontSize: '11px',
-    fontWeight: 600,
-    cursor: 'pointer',
   },
   row: {
     display: 'flex',

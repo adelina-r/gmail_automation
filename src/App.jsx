@@ -238,12 +238,12 @@ export default function App() {
     })
   }
 
-  // Bulk "🗑 Trash selected" from the Cleanup Queue multi-select: stage a manual
-  // trash for each checked email (staged-not-immediate, like the single Trash it —
-  // each becomes a pending Delete the user then approves via "Apply selected").
-  // Supersedes other pending changes for those emails; keeps approved history.
-  function handleTrashMany(emailsToTrash) {
-    if (!emailsToTrash?.length) return
+  // Bulk "🗑 Trash" from the Cleanup Queue selection bar: force-trash every checked
+  // email regardless of its staged action. Stages a manual trash per email
+  // (superseding other pending changes; keeps approved history) AND executes it now —
+  // matching the per-row Delete / selection Apply, which also act on click.
+  async function handleTrashMany(emailsToTrash) {
+    if (!accessToken || !emailsToTrash?.length) return
     const changes = emailsToTrash.map(makeManualTrash)
     const ids = new Set(emailsToTrash.map((e) => e.id))
     setStagedChanges((prev) => {
@@ -251,6 +251,7 @@ export default function App() {
       const have = new Set(kept.map((c) => c.id))
       return [...kept, ...changes.filter((c) => !have.has(c.id))]
     })
+    await handleApproveAll(changes)
   }
 
   // Bulk "Leave as-is" from the Cleanup Queue multi-select: snooze/exclude every

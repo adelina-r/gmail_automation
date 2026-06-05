@@ -164,7 +164,6 @@ export default function InboxDigest({
                 )}
                 onApprove={onApprove}
                 onExclude={onExclude}
-                onTrash={onTrash}
                 onTrashMany={onTrashMany}
                 onExcludeMany={onExcludeMany}
                 onApproveAll={onApproveAll}
