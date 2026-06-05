@@ -90,10 +90,21 @@ export async function classifyEmails(apiKey, emails) {
     const batch = needsAi.slice(i, i + BATCH_SIZE)
     const batchResults = await classifyBatch(apiKey, batch)
     for (const [id, data] of batchResults) {
-      // Apply `never` guardrails (e.g. scclc-exchange must not be action_needed).
+      // The model occasionally echoes back an id that wasn't in the batch (a
+      // hallucinated/garbled id). Ignore those — keying results to a real email id
+      // is what matters, and resolveCategory needs a real email for sender rules.
       const email = batch.find((e) => e.id === id)
+      if (!email) continue
+      // Apply `never` guardrails (e.g. scclc-exchange must not be action_needed).
       const resolved = resolveCategory(email, data.category, data.reason)
       results.set(id, { category: resolved.category, reason: resolved.reason })
+    }
+    // Back-fill any email the model dropped from its response so every email still
+    // gets a classification (downstream code does classifications.get(email.id)).
+    for (const email of batch) {
+      if (!results.has(email.id)) {
+        results.set(email.id, { category: 'other', reason: 'no classification returned' })
+      }
     }
   }
   return results

@@ -88,6 +88,7 @@ export const SENDER_RULES = [
  * Find the first matching sender rule for an email, or null.
  */
 export function matchSenderRule(email) {
+  if (!email) return null
   for (const rule of SENDER_RULES) {
     if (!rule.enabled) continue
     const fields = rule.matchFields ?? ['senderEmail', 'senderName']
@@ -111,7 +112,7 @@ export function matchSenderRule(email) {
  * Returns null only when there's no rule and no AI category to fall back on.
  */
 export function resolveCategory(email, aiCategory = null, aiReason = '') {
-  const rule = matchSenderRule(email)
+  const rule = email ? matchSenderRule(email) : null
   if (rule?.category) {
     return { category: rule.category, reason: rule.reason, bypassedAi: true }
   }
