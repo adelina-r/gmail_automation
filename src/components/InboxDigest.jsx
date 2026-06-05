@@ -30,6 +30,8 @@ export default function InboxDigest({
   onApprove,
   onExclude,
   onTrash,
+  onTrashMany,
+  onExcludeMany,
   onApproveAll,
   onRefresh,
   loading,
@@ -163,6 +165,8 @@ export default function InboxDigest({
                 onApprove={onApprove}
                 onExclude={onExclude}
                 onTrash={onTrash}
+                onTrashMany={onTrashMany}
+                onExcludeMany={onExcludeMany}
                 onApproveAll={onApproveAll}
                 onMove={onMove}
               />

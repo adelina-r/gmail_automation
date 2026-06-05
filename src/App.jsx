@@ -238,6 +238,38 @@ export default function App() {
     })
   }
 
+  // Bulk "🗑 Trash selected" from the Cleanup Queue multi-select: stage a manual
+  // trash for each checked email (staged-not-immediate, like the single Trash it —
+  // each becomes a pending Delete the user then approves via "Apply selected").
+  // Supersedes other pending changes for those emails; keeps approved history.
+  function handleTrashMany(emailsToTrash) {
+    if (!emailsToTrash?.length) return
+    const changes = emailsToTrash.map(makeManualTrash)
+    const ids = new Set(emailsToTrash.map((e) => e.id))
+    setStagedChanges((prev) => {
+      const kept = prev.filter((c) => !ids.has(c.emailId) || c.status !== 'pending')
+      const have = new Set(kept.map((c) => c.id))
+      return [...kept, ...changes.filter((c) => !have.has(c.id))]
+    })
+  }
+
+  // Bulk "Leave as-is" from the Cleanup Queue multi-select: snooze/exclude every
+  // checked email at once, then regenerate so their staged rows disappear together.
+  function handleExcludeMany(emailsToExclude, mode, until) {
+    if (!emailsToExclude?.length) return
+    let next = exclusions
+    for (const email of emailsToExclude) {
+      next = exclusionsStore.add(next, {
+        target: { type: 'message', value: email.id, label: email.subject },
+        mode,
+        until,
+      })
+    }
+    exclusionsStore.save(next)
+    setExclusions(next)
+    regenerate(next)
+  }
+
   // Undo a correction (from the Learned rules panel) — re-derive from base.
   function handleRemoveCorrection(id) {
     const next = correctionsStore.remove(corrections, id)
@@ -296,6 +328,8 @@ export default function App() {
         onApprove={handleApprove}
         onExclude={handleExclude}
         onTrash={handleTrash}
+        onTrashMany={handleTrashMany}
+        onExcludeMany={handleExcludeMany}
         onApproveAll={handleApproveAll}
         onRefresh={handleRefresh}
         loading={loading}

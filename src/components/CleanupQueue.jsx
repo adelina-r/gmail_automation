@@ -4,8 +4,12 @@ import { formatDate } from '../lib/utils.js'
 import LeaveAsIsMenu from './LeaveAsIsMenu.jsx'
 import MoveMenu from './MoveMenu.jsx'
 
-export default function CleanupQueue({ emails, classifications, stagedChanges, onApprove, onExclude, onTrash, onApproveAll, onMove }) {
+export default function CleanupQueue({ emails, classifications, stagedChanges, onApprove, onExclude, onTrash, onTrashMany, onExcludeMany, onApproveAll, onMove }) {
   const [collapsed, setCollapsed] = useState(false)
+  // Multi-select: ids of rows the user has checked for a batch action. Distinct from
+  // "Clear all" (which sweeps only bulk-eligible mail) — an explicit selection lets you
+  // pick a subset, including recent/age-gated items the age gate would otherwise hold back.
+  const [selected, setSelected] = useState(new Set())
 
   const pending = stagedChanges.filter(
     (c) => c.status === 'pending' && emails.some((e) => e.id === c.emailId)
@@ -26,6 +30,51 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
   // Bulk-eligible pending changes for one sub-category (drives its "Clear all").
   const catBulkPending = (catEmails) =>
     bulkPending.filter((c) => catEmails.some((e) => e.id === c.emailId))
+
+  // ── Multi-select helpers ─────────────────────────────────────────────────────
+  // A row is selectable unless it's already done (approved). Approved rows show ✓.
+  const isSelectable = (email) =>
+    stagedChanges.find((c) => c.emailId === email.id)?.status !== 'approved'
+  const selectableEmails = emails.filter(isSelectable)
+  const selectedEmails = selectableEmails.filter((e) => selected.has(e.id))
+
+  function toggle(id) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+  function toggleCat(catEmails) {
+    const sel = catEmails.filter(isSelectable)
+    const allSel = sel.length > 0 && sel.every((e) => selected.has(e.id))
+    setSelected((prev) => {
+      const next = new Set(prev)
+      for (const e of sel) allSel ? next.delete(e.id) : next.add(e.id)
+      return next
+    })
+  }
+  const clearSel = () => setSelected(new Set())
+
+  // "Apply selected": run each checked row's own staged action (archive/trash),
+  // ignoring the age gate since the user picked these explicitly.
+  function applySelected() {
+    const changes = stagedChanges.filter(
+      (c) => c.status === 'pending' && selected.has(c.emailId)
+    )
+    if (changes.length) onApproveAll(changes)
+    clearSel()
+  }
+  // "🗑 Trash selected": stage a manual trash for each checked row (becomes a pending
+  // Delete). Keep the selection so the user can immediately hit "Apply selected".
+  function trashSelected() {
+    if (selectedEmails.length) onTrashMany?.(selectedEmails)
+  }
+  // "Leave as-is" on the whole selection.
+  function leaveSelected(mode, until) {
+    if (selectedEmails.length) onExcludeMany?.(selectedEmails, mode, until)
+    clearSel()
+  }
 
   return (
     <section style={styles.section}>
@@ -49,14 +98,39 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
         </div>
       </div>
 
+      {!collapsed && selectedEmails.length > 0 && (
+        <div style={styles.selBar}>
+          <span style={styles.selCount}>{selectedEmails.length} selected</span>
+          <button style={styles.selApply} onClick={applySelected}>Apply</button>
+          {onTrashMany && (
+            <button style={styles.selTrash} onClick={trashSelected}>🗑 Trash</button>
+          )}
+          {onExcludeMany && <LeaveAsIsMenu size="sm" onExclude={leaveSelected} />}
+          <button style={styles.selClear} onClick={clearSel}>Clear</button>
+        </div>
+      )}
+
       {!collapsed && (
         <div>
           {Object.entries(byCat).map(([cat, catEmails]) => {
             const catPending = catBulkPending(catEmails)
+            const catSelectable = catEmails.filter(isSelectable)
+            const allCatSelected = catSelectable.length > 0 && catSelectable.every((e) => selected.has(e.id))
             return (
             <div key={cat}>
               <div style={styles.subheader}>
-                <span>{CATEGORIES[cat]?.emoji} {CATEGORIES[cat]?.label ?? cat} ({catEmails.length})</span>
+                <span style={styles.subheaderLeft}>
+                  {catSelectable.length > 0 && (
+                    <input
+                      type="checkbox"
+                      checked={allCatSelected}
+                      onChange={() => toggleCat(catEmails)}
+                      title="Select all in this group"
+                      style={styles.checkbox}
+                    />
+                  )}
+                  {CATEGORIES[cat]?.emoji} {CATEGORIES[cat]?.label ?? cat} ({catEmails.length})
+                </span>
                 {catPending.length > 0 && (
                   <button
                     style={styles.clearCatBtn}
@@ -74,6 +148,16 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
                 const notBulk = pendingChange?.bulkEligible === false
                 return (
                   <div key={email.id} style={styles.row}>
+                    {isSelectable(email) ? (
+                      <input
+                        type="checkbox"
+                        checked={selected.has(email.id)}
+                        onChange={() => toggle(email.id)}
+                        style={styles.checkbox}
+                      />
+                    ) : (
+                      <span style={styles.checkboxSpacer} />
+                    )}
                     <div style={styles.rowMain}>
                       <span style={styles.rowSender}>
                         {email.senderName || email.senderEmail}
@@ -182,6 +266,50 @@ const styles = {
     color: 'var(--text-secondary)',
     background: '#fafafa',
     borderTop: '1px solid var(--border)',
+  },
+  subheaderLeft: { display: 'flex', alignItems: 'center', gap: '8px' },
+  checkbox: { width: '14px', height: '14px', margin: 0, cursor: 'pointer', flexShrink: 0 },
+  checkboxSpacer: { width: '14px', flexShrink: 0 },
+  selBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '8px 16px',
+    background: 'var(--bg)',
+    borderTop: '1px solid var(--border)',
+    borderBottom: '1px solid var(--border)',
+  },
+  selCount: { fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginRight: '2px' },
+  selApply: {
+    padding: '4px 12px',
+    background: 'var(--accent)',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 'var(--radius)',
+    fontSize: '12px',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  selTrash: {
+    padding: '4px 10px',
+    background: 'var(--danger-light)',
+    color: 'var(--danger)',
+    border: '1px solid #fca5a5',
+    borderRadius: 'var(--radius)',
+    fontSize: '12px',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  selClear: {
+    padding: '4px 10px',
+    background: 'transparent',
+    color: 'var(--text-muted)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius)',
+    fontSize: '12px',
+    fontWeight: 600,
+    cursor: 'pointer',
+    marginLeft: 'auto',
   },
   clearCatBtn: {
     padding: '3px 8px',
