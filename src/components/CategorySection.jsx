@@ -42,9 +42,11 @@ export default function CategorySection({
       {!collapsed && (
         <div style={styles.list}>
           {emails.map((email) => {
-            const change = stagedChanges.find(
-              (c) => c.emailId === email.id && c.status === 'pending'
-            )
+            // Prefer a pending change (actionable); else surface an approved one so
+            // the card can show "✓ Done" instead of reverting to an untouched look.
+            const change =
+              stagedChanges.find((c) => c.emailId === email.id && c.status === 'pending') ??
+              stagedChanges.find((c) => c.emailId === email.id && c.status === 'approved')
             return (
               <EmailCard
                 key={email.id}
