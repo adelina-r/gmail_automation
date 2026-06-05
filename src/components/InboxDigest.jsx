@@ -29,6 +29,9 @@ export default function InboxDigest({
   stagedChanges,
   onApprove,
   onExclude,
+  onTrash,
+  onTrashMany,
+  onExcludeMany,
   onApproveAll,
   onRefresh,
   loading,
@@ -146,6 +149,7 @@ export default function InboxDigest({
                 )}
                 onApprove={onApprove}
                 onExclude={onExclude}
+                onTrash={onTrash}
                 onApproveAll={onApproveAll}
                 onMove={onMove}
               />
@@ -160,6 +164,8 @@ export default function InboxDigest({
                 )}
                 onApprove={onApprove}
                 onExclude={onExclude}
+                onTrashMany={onTrashMany}
+                onExcludeMany={onExcludeMany}
                 onApproveAll={onApproveAll}
                 onMove={onMove}
               />
