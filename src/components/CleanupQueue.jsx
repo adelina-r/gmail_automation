@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { CATEGORIES } from '../lib/anthropic.js'
-import { formatDate } from '../lib/utils.js'
+import { formatDate, actionDoneLabel } from '../lib/utils.js'
 import LeaveAsIsMenu from './LeaveAsIsMenu.jsx'
 import MoveMenu from './MoveMenu.jsx'
 
@@ -167,7 +167,7 @@ export default function CleanupQueue({ emails, classifications, stagedChanges, o
                           <LeaveAsIsMenu size="sm" onExclude={(mode, until) => onExclude(email, mode, until)} />
                         </div>
                       ) : change?.status === 'approved' ? (
-                        <span style={styles.doneTag}>✓ Done</span>
+                        <span style={styles.doneTag}>{actionDoneLabel(change.action)}</span>
                       ) : (
                         // No staged action: don't imply "done" — let the user move,
                         // snooze, or exclude it instead.

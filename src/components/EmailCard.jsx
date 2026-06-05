@@ -1,4 +1,4 @@
-import { formatDate } from '../lib/utils.js'
+import { formatDate, actionDoneLabel } from '../lib/utils.js'
 import LeaveAsIsMenu from './LeaveAsIsMenu.jsx'
 import MoveMenu from './MoveMenu.jsx'
 
@@ -25,7 +25,7 @@ export default function EmailCard({ email, classification, action, onApprove, on
         {action?.status === 'approved' ? (
           // Once applied, show a Done marker instead of the action controls (mirrors
           // the Cleanup Queue) — otherwise the card reverted to looking untouched.
-          <span style={styles.doneTag}>✓ Done</span>
+          <span style={styles.doneTag}>{actionDoneLabel(action.action)}</span>
         ) : (
           <>
             {action && (

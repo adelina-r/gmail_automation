@@ -17,3 +17,17 @@ export function formatDate(ms) {
   }
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
+
+/**
+ * Past-tense "done" marker for an approved staged change, so the UI says WHAT
+ * happened (archive ≠ delete) instead of a generic "Done".
+ */
+export function actionDoneLabel(action) {
+  switch (action) {
+    case 'trash': return '✓ Trashed'
+    case 'archive': return '✓ Archived'
+    case 'label': return '✓ Filed'
+    case 'create-label': return '✓ Created'
+    default: return '✓ Done'
+  }
+}
